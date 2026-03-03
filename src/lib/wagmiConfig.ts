@@ -2,7 +2,7 @@ import { createConfig, http } from "wagmi";
 import { mainnet, polygon, arbitrum, optimism, base } from "wagmi/chains";
 import { injected, walletConnect } from "@wagmi/connectors";
 
-const projectId = "2b5a9f1e3c4d5e6f7a8b9c0d1e2f3a4b";
+const projectId = "700dd511eaf94e12b87f021c8a6a381c";
 
 export const wagmiConfig = createConfig({
   chains: [mainnet, polygon, arbitrum, optimism, base],

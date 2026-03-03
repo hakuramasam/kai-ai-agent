@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Wallet, CheckCircle2, AlertCircle, Loader2, Link2, Unlink } from "lucide-react";
 import { toast } from "sonner";
 
-const WC_PROJECT_ID = "2b5a9f1e3c4d5e6f7a8b9c0d1e2f3a4b";
+const WC_PROJECT_ID = "700dd511eaf94e12b87f021c8a6a381c";
 
 interface WalletBinderProps {
   currentWallet: string | null;
