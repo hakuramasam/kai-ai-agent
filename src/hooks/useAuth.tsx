@@ -71,12 +71,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signInWithTwitter = async () => {
-    await supabase.auth.signInWithOAuth({
-      provider: "twitter",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const redirectTo = encodeURIComponent(`${window.location.origin}/auth/callback`);
+    window.location.href = `${supabaseUrl}/functions/v1/x-auth?action=login&redirect_to=${redirectTo}`;
   };
 
   const signOut = async () => {
