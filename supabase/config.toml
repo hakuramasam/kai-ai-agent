@@ -1,1 +1,4 @@
 project_id = "mlriqeztoybjcqsgyheg"
+
+[functions.x-auth]
+verify_jwt = false
