@@ -1,10 +1,10 @@
-import { Navigate } from "react-router-dom";
+import { Navigate, Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { useState } from "react";
 import { useAccount } from "wagmi";
 import WalletBinder from "@/components/WalletBinder";
 import { Button } from "@/components/ui/button";
-import { LogOut, ExternalLink, User, Wallet, Copy, CheckCheck, Shield } from "lucide-react";
+import { LogOut, ExternalLink, User, Wallet, Copy, CheckCheck, Shield, MessageCircle, Zap } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Dashboard() {
@@ -21,6 +21,7 @@ export default function Dashboard() {
   const xName = profile?.x_name || user.user_metadata?.full_name || xUsername;
   const xId = profile?.x_user_id || user.user_metadata?.provider_id;
   const walletAddress = profile?.wallet_address;
+  const balance = (profile as any)?.balance ?? 0;
 
   const copyAddress = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -154,16 +155,18 @@ export default function Dashboard() {
         <div className="rounded-xl border border-primary/20 bg-primary/5 p-6 flex flex-col sm:flex-row items-center gap-4 justify-between">
           <div>
             <h3 className="font-semibold mb-1">Ready to chat with Kai?</h3>
-            <p className="text-sm text-muted-foreground">Your AI agent is live and waiting for you.</p>
+            <p className="text-sm text-muted-foreground">Your AI agent is live. Each message costs 402 credits.</p>
+            <div className="flex items-center gap-2 mt-2 text-xs mono text-muted-foreground">
+              <Zap className="w-3.5 h-3.5 text-primary" />
+              <span>Balance: {balance.toLocaleString()} credits</span>
+            </div>
           </div>
-          <a
-            href="https://elizacloud.ai/chat/@kai85"
-            target="_blank"
-            rel="noopener noreferrer"
+          <Link
+            to="/chat"
             className="flex-shrink-0 flex items-center gap-2 px-6 py-3 rounded-lg bg-primary text-primary-foreground font-semibold hover:bg-primary/90 transition-all hover:scale-[1.02] glow-cyan"
           >
-            Launch Kai Agent <ExternalLink className="w-4 h-4" />
-          </a>
+            <MessageCircle className="w-4 h-4" /> Chat with Kai
+          </Link>
         </div>
       </main>
     </div>
