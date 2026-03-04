@@ -2,3 +2,6 @@ project_id = "mlriqeztoybjcqsgyheg"
 
 [functions.x-auth]
 verify_jwt = false
+
+[functions.kai-chat]
+verify_jwt = false
