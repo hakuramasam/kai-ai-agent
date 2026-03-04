@@ -16,8 +16,10 @@ export type Database = {
     Tables: {
       profiles: {
         Row: {
+          balance: number
           created_at: string
           id: string
+          role: string
           updated_at: string
           user_id: string
           wallet_address: string | null
@@ -27,8 +29,10 @@ export type Database = {
           x_username: string | null
         }
         Insert: {
+          balance?: number
           created_at?: string
           id?: string
+          role?: string
           updated_at?: string
           user_id: string
           wallet_address?: string | null
@@ -38,8 +42,10 @@ export type Database = {
           x_username?: string | null
         }
         Update: {
+          balance?: number
           created_at?: string
           id?: string
+          role?: string
           updated_at?: string
           user_id?: string
           wallet_address?: string | null
@@ -47,6 +53,30 @@ export type Database = {
           x_name?: string | null
           x_user_id?: string | null
           x_username?: string | null
+        }
+        Relationships: []
+      }
+      usage_logs: {
+        Row: {
+          cost: number
+          created_at: string
+          endpoint: string
+          id: string
+          user_id: string
+        }
+        Insert: {
+          cost: number
+          created_at?: string
+          endpoint: string
+          id?: string
+          user_id: string
+        }
+        Update: {
+          cost?: number
+          created_at?: string
+          endpoint?: string
+          id?: string
+          user_id?: string
         }
         Relationships: []
       }
