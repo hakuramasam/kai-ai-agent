@@ -3,10 +3,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+    "authorization, x-client-info, apikey, content-type, x-payment, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const CHAT_COST = 402;
+const KAI_TOKEN = "0x86af9cb35a613992ea552e0ba7419f1dada3084c";
+const BASE_CHAIN_ID = 8453;
+const CHAT_PRICE_KAI = "402"; // 402 $KAI per message (in token units)
+const THIRDWEB_API = "https://api.thirdweb.com";
 
 // Simple in-memory rate limiter (per-isolate, resets on cold start)
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -32,6 +35,16 @@ function autonomousPlanner(input: { message: string }) {
   };
 }
 
+// Get agent wallet address from config
+async function getAgentWallet(adminClient: ReturnType<typeof createClient>): Promise<string | null> {
+  const { data } = await adminClient
+    .from("agent_config")
+    .select("value")
+    .eq("key", "agent_wallet_address")
+    .single();
+  return data?.value || null;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -41,6 +54,7 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const elizaKey = Deno.env.get("ELIZACLOUD_API_KEY")!;
+    const thirdwebKey = Deno.env.get("THIRDWEB_SECRET_KEY")!;
 
     // --- Auth: validate JWT ---
     const authHeader = req.headers.get("Authorization");
@@ -85,41 +99,75 @@ Deno.serve(async (req) => {
       });
     }
 
-    // --- Check balance using admin client ---
     const adminClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    const { data: profile, error: profileErr } = await adminClient
-      .from("profiles")
-      .select("balance")
-      .eq("user_id", userId)
-      .single();
+    // --- x402 Payment Flow ---
+    const paymentHeader = req.headers.get("x-payment") || body?.paymentHeader;
+    const agentWallet = await getAgentWallet(adminClient);
 
-    if (profileErr || !profile) {
-      return new Response(JSON.stringify({ error: "Profile not found" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (!paymentHeader) {
+      // Return 402 Payment Required with x402 payment details
+      return new Response(
+        JSON.stringify({
+          error: "Payment Required",
+          x402: {
+            version: "2",
+            maxAmountRequired: CHAT_PRICE_KAI,
+            asset: KAI_TOKEN,
+            network: `eip155:${BASE_CHAIN_ID}`,
+            chainId: BASE_CHAIN_ID,
+            payTo: agentWallet || "0x0000000000000000000000000000000000000000",
+            description: `Chat with Kai Agent - ${CHAT_PRICE_KAI} $KAI per message`,
+            resource: "/kai-chat",
+            mimeType: "application/json",
+          },
+        }),
+        {
+          status: 402,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json",
+            "X-Payment-Required": "true",
+          },
+        }
+      );
     }
 
-    if (profile.balance < CHAT_COST) {
+    // --- Verify x402 payment via thirdweb ---
+    let paymentVerified = false;
+    try {
+      const verifyRes = await fetch(`${THIRDWEB_API}/v1/payments/x402/verify`, {
+        method: "POST",
+        headers: {
+          "x-secret-key": thirdwebKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          payment: paymentHeader,
+          chainId: BASE_CHAIN_ID,
+          tokenAddress: KAI_TOKEN,
+        }),
+      });
+      const verifyData = await verifyRes.json();
+      paymentVerified = verifyData?.valid === true || verifyRes.ok;
+    } catch (verifyErr) {
+      console.error("Payment verification failed:", verifyErr);
+    }
+
+    if (!paymentVerified) {
       return new Response(
-        JSON.stringify({ error: "Insufficient balance", required: CHAT_COST, current: profile.balance }),
+        JSON.stringify({ error: "Payment verification failed", details: "x402 payment could not be verified on-chain" }),
         { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // --- Deduct balance & log usage ---
-    await adminClient
-      .from("profiles")
-      .update({ balance: profile.balance - CHAT_COST })
-      .eq("user_id", userId);
-
+    // --- Log usage (on-chain payment verified) ---
     await adminClient.from("usage_logs").insert({
       user_id: userId,
       endpoint: "chat",
-      cost: CHAT_COST,
+      cost: parseInt(CHAT_PRICE_KAI),
     });
 
     // --- Autonomous planner ---

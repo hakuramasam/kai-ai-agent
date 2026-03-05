@@ -155,10 +155,10 @@ export default function Dashboard() {
         <div className="rounded-xl border border-primary/20 bg-primary/5 p-6 flex flex-col sm:flex-row items-center gap-4 justify-between">
           <div>
             <h3 className="font-semibold mb-1">Ready to chat with Kai?</h3>
-            <p className="text-sm text-muted-foreground">Your AI agent is live. Each message costs 402 credits.</p>
+            <p className="text-sm text-muted-foreground">Pay per message with <span className="text-primary font-semibold">$KAI</span> token on Base via x402 protocol.</p>
             <div className="flex items-center gap-2 mt-2 text-xs mono text-muted-foreground">
               <Zap className="w-3.5 h-3.5 text-primary" />
-              <span>Balance: {balance.toLocaleString()} credits</span>
+              <span>402 $KAI per message • {walletAddress ? "Wallet bound ✓" : "Bind wallet to chat"}</span>
             </div>
           </div>
           <Link
