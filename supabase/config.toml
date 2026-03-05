@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.kai-chat]
 verify_jwt = false
+
+[functions.agent-wallet]
+verify_jwt = false
