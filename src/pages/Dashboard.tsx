@@ -48,19 +48,23 @@ export default function Dashboard() {
             <span className="font-semibold tracking-wide text-sm">Kai Agent</span>
             <span className="mono text-xs text-primary/60 ml-1">v1.0</span>
           </div>
-          <div className="flex items-center gap-3">
-            <a
-              href="https://elizacloud.ai/chat/@kai85"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors mono"
-            >
-              Open Chat <ExternalLink className="w-3 h-3" />
-            </a>
-            <Button variant="ghost" size="sm" onClick={signOut} className="text-muted-foreground hover:text-foreground">
-              <LogOut className="w-4 h-4" />
-            </Button>
-          </div>
+            <div className="flex items-center gap-3">
+              <Link
+                to="/admin"
+                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mono"
+              >
+                Admin <ExternalLink className="w-3 h-3" />
+              </Link>
+              <Link
+                to="/chat"
+                className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors mono"
+              >
+                Chat <ExternalLink className="w-3 h-3" />
+              </Link>
+              <Button variant="ghost" size="sm" onClick={signOut} className="text-muted-foreground hover:text-foreground">
+                <LogOut className="w-4 h-4" />
+              </Button>
+            </div>
         </div>
       </header>
 
@@ -82,14 +86,12 @@ export default function Dashboard() {
             <h1 className="text-xl font-bold">{xName}</h1>
             <p className="text-muted-foreground text-sm">@{xUsername}</p>
           </div>
-          <a
-            href="https://elizacloud.ai/chat/@kai85"
-            target="_blank"
-            rel="noopener noreferrer"
+          <Link
+            to="/chat"
             className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors glow-cyan"
           >
             Chat with Kai <ExternalLink className="w-4 h-4" />
-          </a>
+          </Link>
         </div>
 
         <div className="grid md:grid-cols-2 gap-6">
