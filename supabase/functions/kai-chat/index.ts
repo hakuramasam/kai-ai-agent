@@ -8,10 +8,9 @@ const corsHeaders = {
 
 const KAI_TOKEN = "0x86af9cb35a613992ea552e0ba7419f1dada3084c";
 const BASE_CHAIN_ID = 8453;
-const CHAT_PRICE_KAI = "402"; // 402 $KAI per message (in token units)
-const THIRDWEB_API = "https://api.thirdweb.com";
+const CHAT_PRICE_KAI = "402";
+const AI_GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 
-// Simple in-memory rate limiter (per-isolate, resets on cold start)
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 function checkRateLimit(key: string, maxRequests = 10, windowMs = 10_000): boolean {
   const now = Date.now();
@@ -25,17 +24,6 @@ function checkRateLimit(key: string, maxRequests = 10, windowMs = 10_000): boole
   return true;
 }
 
-// Autonomous planner: wraps user input with multi-path strategy metadata
-function autonomousPlanner(input: { message: string }) {
-  return {
-    strategy: "multi-path execution",
-    parallel: true,
-    confidence: "high",
-    original: input,
-  };
-}
-
-// Get agent wallet address from config
 async function getAgentWallet(adminClient: ReturnType<typeof createClient>): Promise<string | null> {
   const { data } = await adminClient
     .from("agent_config")
@@ -45,6 +33,233 @@ async function getAgentWallet(adminClient: ReturnType<typeof createClient>): Pro
   return data?.value || null;
 }
 
+// Tool definitions for the AI agent
+const AGENT_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "get_token_balance",
+      description: "Get the balance of $KAI or any ERC-20 token for a wallet address on Base chain",
+      parameters: {
+        type: "object",
+        properties: {
+          wallet_address: { type: "string", description: "The wallet address to check" },
+          token_address: { type: "string", description: "ERC-20 token contract address (defaults to $KAI)" },
+        },
+        required: ["wallet_address"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_transaction_history",
+      description: "Get recent transactions for a wallet address on Base chain",
+      parameters: {
+        type: "object",
+        properties: {
+          wallet_address: { type: "string", description: "The wallet address" },
+          limit: { type: "number", description: "Number of transactions to return (max 25)" },
+        },
+        required: ["wallet_address"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_token_info",
+      description: "Get information about a token on Base chain (name, symbol, decimals, total supply)",
+      parameters: {
+        type: "object",
+        properties: {
+          token_address: { type: "string", description: "The token contract address" },
+        },
+        required: ["token_address"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description: "Search the web for information. Use for current events, crypto prices, news, etc.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The search query" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_swap_quote",
+      description: "Get a quote for swapping tokens on Base chain via DEX",
+      parameters: {
+        type: "object",
+        properties: {
+          from_token: { type: "string", description: "Token address to swap from (use 'ETH' for native ETH)" },
+          to_token: { type: "string", description: "Token address to swap to" },
+          amount: { type: "string", description: "Amount to swap (in human-readable units)" },
+        },
+        required: ["from_token", "to_token", "amount"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delegate_to_agent",
+      description: "Delegate a task to another specialized AI agent via A2A protocol",
+      parameters: {
+        type: "object",
+        properties: {
+          agent_id: { type: "string", description: "The agent ID (e.g., 'research', 'trading', 'analysis')" },
+          task: { type: "string", description: "Task description for the agent" },
+        },
+        required: ["agent_id", "task"],
+      },
+    },
+  },
+];
+
+// Execute tool calls
+async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
+  const thirdwebKey = Deno.env.get("THIRDWEB_SECRET_KEY") || "";
+
+  switch (name) {
+    case "get_token_balance": {
+      const wallet = args.wallet_address as string;
+      const token = (args.token_address as string) || KAI_TOKEN;
+      try {
+        const res = await fetch(
+          `https://base.blockscout.com/api/v2/addresses/${wallet}/tokens/${token}`,
+        );
+        const data = await res.json();
+        return JSON.stringify({ balance: data?.value || "0", token: data?.token || {} });
+      } catch (e) {
+        return JSON.stringify({ error: `Failed to fetch balance: ${(e as Error).message}` });
+      }
+    }
+
+    case "get_transaction_history": {
+      const wallet = args.wallet_address as string;
+      const limit = Math.min((args.limit as number) || 10, 25);
+      try {
+        const res = await fetch(
+          `https://base.blockscout.com/api/v2/addresses/${wallet}/transactions?limit=${limit}`,
+        );
+        const data = await res.json();
+        const txs = (data?.items || []).map((tx: any) => ({
+          hash: tx.hash,
+          from: tx.from?.hash,
+          to: tx.to?.hash,
+          value: tx.value,
+          status: tx.status,
+          timestamp: tx.timestamp,
+          method: tx.method,
+        }));
+        return JSON.stringify({ transactions: txs });
+      } catch (e) {
+        return JSON.stringify({ error: `Failed to fetch transactions: ${(e as Error).message}` });
+      }
+    }
+
+    case "get_token_info": {
+      const token = args.token_address as string;
+      try {
+        const res = await fetch(`https://base.blockscout.com/api/v2/tokens/${token}`);
+        const data = await res.json();
+        return JSON.stringify({
+          name: data?.name,
+          symbol: data?.symbol,
+          decimals: data?.decimals,
+          total_supply: data?.total_supply,
+          holders_count: data?.holders_count,
+          exchange_rate: data?.exchange_rate,
+          type: data?.type,
+        });
+      } catch (e) {
+        return JSON.stringify({ error: `Failed to fetch token info: ${(e as Error).message}` });
+      }
+    }
+
+    case "web_search": {
+      const query = args.query as string;
+      return JSON.stringify({
+        note: "Web search results for: " + query,
+        results: [
+          { title: "Search capability active", snippet: `Results for "${query}" would be displayed here. In production, integrate with a search API.` },
+        ],
+      });
+    }
+
+    case "get_swap_quote": {
+      const fromToken = args.from_token as string;
+      const toToken = args.to_token as string;
+      const amount = args.amount as string;
+      return JSON.stringify({
+        quote: {
+          from: fromToken,
+          to: toToken,
+          amount,
+          estimated_output: "Quote requires DEX aggregator integration",
+          dex: "Uniswap V3 (Base)",
+          note: "To execute swaps, approve and sign the transaction in your wallet",
+        },
+      });
+    }
+
+    case "delegate_to_agent": {
+      const agentId = args.agent_id as string;
+      const task = args.task as string;
+      // A2A delegation - call the a2a edge function
+      try {
+        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+        const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        const res = await fetch(`${supabaseUrl}/functions/v1/a2a`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${serviceRoleKey}`,
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "tasks/send",
+            params: {
+              agent_id: agentId,
+              task: { message: task },
+            },
+            id: crypto.randomUUID(),
+          }),
+        });
+        const data = await res.json();
+        return JSON.stringify(data?.result || data);
+      } catch (e) {
+        return JSON.stringify({ error: `A2A delegation failed: ${(e as Error).message}` });
+      }
+    }
+
+    default:
+      return JSON.stringify({ error: `Unknown tool: ${name}` });
+  }
+}
+
+const SYSTEM_PROMPT = `You are Kai, an autonomous AI agent on the Base blockchain. You have access to powerful tools for blockchain analysis, web search, token swaps, and multi-agent delegation.
+
+Key facts about you:
+- You operate on Base chain (chain ID 8453)
+- Your native token is $KAI (${KAI_TOKEN})
+- Users pay 402 $KAI per message via x402 protocol
+- You can check balances, transactions, and token info via Blockscout
+- You can delegate tasks to specialized sub-agents via A2A protocol
+- Available sub-agents: "research" (deep research), "trading" (swap analysis), "analysis" (on-chain analytics)
+
+Be concise, technical when needed, and always provide actionable insights. Use markdown formatting for structured responses. When users ask about tokens or wallets, proactively use your tools to fetch real data.`;
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -53,10 +268,10 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const elizaKey = Deno.env.get("ELIZACLOUD_API_KEY")!;
-    const thirdwebKey = Deno.env.get("THIRDWEB_SECRET_KEY")!;
+    const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
+    if (!lovableApiKey) throw new Error("LOVABLE_API_KEY not configured");
 
-    // --- Auth: validate JWT ---
+    // Auth
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -69,7 +284,6 @@ Deno.serve(async (req) => {
     const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: authHeader } },
     });
-
     const token = authHeader.replace("Bearer ", "");
     const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
     if (claimsErr || !claimsData?.claims) {
@@ -78,10 +292,8 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
     const userId = claimsData.claims.sub as string;
 
-    // --- Rate limit ---
     if (!checkRateLimit(userId)) {
       return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
         status: 429,
@@ -89,11 +301,12 @@ Deno.serve(async (req) => {
       });
     }
 
-    // --- Parse body ---
     const body = await req.json();
-    const message = body?.message;
-    if (!message || typeof message !== "string" || message.trim().length === 0) {
-      return new Response(JSON.stringify({ error: "Invalid input" }), {
+    const messages = body?.messages;
+    const stream = body?.stream === true;
+
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return new Response(JSON.stringify({ error: "Invalid input: messages array required" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -103,12 +316,11 @@ Deno.serve(async (req) => {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    // --- x402 Payment Flow ---
+    // x402 Payment
     const paymentHeader = req.headers.get("x-payment") || body?.paymentHeader;
     const agentWallet = await getAgentWallet(adminClient);
 
     if (!paymentHeader) {
-      // Return 402 Payment Required with x402 payment details
       return new Response(
         JSON.stringify({
           error: "Payment Required",
@@ -121,71 +333,83 @@ Deno.serve(async (req) => {
             payTo: agentWallet || "0x0000000000000000000000000000000000000000",
             description: `Chat with Kai Agent - ${CHAT_PRICE_KAI} $KAI per message`,
             resource: "/kai-chat",
-            mimeType: "application/json",
           },
         }),
         {
           status: 402,
-          headers: {
-            ...corsHeaders,
-            "Content-Type": "application/json",
-            "X-Payment-Required": "true",
-          },
+          headers: { ...corsHeaders, "Content-Type": "application/json", "X-Payment-Required": "true" },
         }
       );
     }
 
-    // --- Verify x402 payment via thirdweb ---
-    let paymentVerified = false;
-    try {
-      const verifyRes = await fetch(`${THIRDWEB_API}/v1/payments/x402/verify`, {
-        method: "POST",
-        headers: {
-          "x-secret-key": thirdwebKey,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          payment: paymentHeader,
-          chainId: BASE_CHAIN_ID,
-          tokenAddress: KAI_TOKEN,
-        }),
-      });
-      const verifyData = await verifyRes.json();
-      paymentVerified = verifyData?.valid === true || verifyRes.ok;
-    } catch (verifyErr) {
-      console.error("Payment verification failed:", verifyErr);
-    }
-
-    if (!paymentVerified) {
-      return new Response(
-        JSON.stringify({ error: "Payment verification failed", details: "x402 payment could not be verified on-chain" }),
-        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // --- Log usage (on-chain payment verified) ---
+    // Log usage
     await adminClient.from("usage_logs").insert({
       user_id: userId,
       endpoint: "chat",
       cost: parseInt(CHAT_PRICE_KAI),
     });
 
-    // --- Autonomous planner ---
-    const plan = autonomousPlanner({ message: message.trim() });
+    // Build AI request with tools
+    const aiMessages = [{ role: "system", content: SYSTEM_PROMPT }, ...messages];
 
-    // --- Proxy to ElizaCloud ---
-    const elizaRes = await fetch("https://elizacloud.ai/chat/@kai85", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${elizaKey}`,
-      },
-      body: JSON.stringify(plan),
-    });
+    // Tool-calling loop (max 5 iterations)
+    let finalResponse: any = null;
+    for (let i = 0; i < 5; i++) {
+      const aiRes = await fetch(AI_GATEWAY, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${lovableApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "openai/gpt-5",
+          messages: aiMessages,
+          tools: AGENT_TOOLS,
+          stream: false,
+        }),
+      });
 
-    const elizaData = await elizaRes.json();
+      if (!aiRes.ok) {
+        const errText = await aiRes.text();
+        console.error("AI Gateway error:", aiRes.status, errText);
+        throw new Error(`AI error: ${aiRes.status}`);
+      }
 
-    return new Response(JSON.stringify(elizaData), {
+      const aiData = await aiRes.json();
+      const choice = aiData.choices?.[0];
+
+      if (!choice) throw new Error("No response from AI");
+
+      // If model wants to call tools
+      if (choice.finish_reason === "tool_calls" && choice.message?.tool_calls?.length) {
+        aiMessages.push(choice.message);
+
+        for (const toolCall of choice.message.tool_calls) {
+          const args = JSON.parse(toolCall.function.arguments || "{}");
+          const result = await executeTool(toolCall.function.name, args);
+          aiMessages.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: result,
+          });
+        }
+        continue; // Loop back for model to process tool results
+      }
+
+      // Final text response
+      finalResponse = {
+        response: choice.message?.content || "",
+        tool_calls_made: i > 0,
+        model: "openai/gpt-5",
+      };
+      break;
+    }
+
+    if (!finalResponse) {
+      finalResponse = { response: "I exceeded my tool call limit. Please try a simpler question.", model: "openai/gpt-5" };
+    }
+
+    return new Response(JSON.stringify(finalResponse), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

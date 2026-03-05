@@ -8,3 +8,9 @@ verify_jwt = false
 
 [functions.agent-wallet]
 verify_jwt = false
+
+[functions.a2a]
+verify_jwt = false
+
+[functions.mcp-server]
+verify_jwt = false
