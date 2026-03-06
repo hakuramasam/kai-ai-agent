@@ -167,14 +167,21 @@ export default function Chat() {
 
       const chatHistory = [...messages, userMsg].map((m) => ({ role: m.role, content: m.content }));
 
-      // Step 1: Get 402 payment details (non-streaming request without payment)
-      const initialRes = await supabase.functions.invoke("kai-chat", {
-        body: { messages: chatHistory },
+      // Step 1: Get 402 payment details (direct fetch for proper status code handling)
+      const token402 = session?.access_token;
+      const res402 = await fetch(`${CHAT_URL}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token402}`,
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ messages: chatHistory }),
       });
 
-      const initialData = initialRes.data;
+      const initialData = await res402.json().catch(() => ({}));
 
-      if (initialData?.x402 || initialData?.error === "Payment Required") {
+      if (res402.status === 402 || initialData?.x402 || initialData?.error === "Payment Required") {
         const paymentDetails: X402PaymentDetails = initialData.x402;
         setPaymentPending(true);
         const paymentHeader = await signX402Payment(paymentDetails);
@@ -183,8 +190,8 @@ export default function Chat() {
         // Step 2: Stream the paid response
         await streamResponse(paymentHeader, chatHistory);
         toast.success(`Paid ${paymentDetails.maxAmountRequired} $KAI`);
-      } else if (initialRes.error) {
-        throw new Error((initialRes.error as any)?.message || "Request failed");
+      } else if (!res402.ok) {
+        throw new Error(initialData?.error || `Request failed (${res402.status})`);
       } else {
         // Unexpected non-402 response
         const reply = initialData?.response || initialData?.text || JSON.stringify(initialData);

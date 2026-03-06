@@ -243,14 +243,13 @@ Deno.serve(async (req) => {
     const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: authHeader } },
     });
-    const token = authHeader.replace("Bearer ", "");
-    const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
-    if (claimsErr || !claimsData?.claims) {
+    const { data: userData, error: userErr } = await userClient.auth.getUser();
+    if (userErr || !userData?.user) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    const userId = claimsData.claims.sub as string;
+    const userId = userData.user.id;
 
     if (!checkRateLimit(userId)) {
       return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
@@ -258,9 +257,16 @@ Deno.serve(async (req) => {
       });
     }
 
-    const body = await req.json();
-    const messages = body?.messages;
+    let body: any;
+    try {
+      body = await req.json();
+    } catch {
+      return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
+    const messages = body?.messages;
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return new Response(JSON.stringify({ error: "Invalid input: messages array required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -340,7 +346,7 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // No more tool calls — now stream the final response
+      // No more tool calls — break to stream final
       break;
     }
 
@@ -350,7 +356,6 @@ Deno.serve(async (req) => {
       headers: { Authorization: `Bearer ${lovableApiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "openai/gpt-5", messages: aiMessages, stream: true,
-        // No tools on the final streaming call to avoid tool_calls in stream
       }),
     });
 
@@ -366,7 +371,6 @@ Deno.serve(async (req) => {
 
     const stream = new ReadableStream({
       async start(controller) {
-        // Send metadata as first SSE event
         const meta = JSON.stringify({ tool_calls_made: toolCallsMade });
         controller.enqueue(encoder.encode(`data: ${meta}\n\n`));
 
