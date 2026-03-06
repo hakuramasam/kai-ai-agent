@@ -33,7 +33,6 @@ async function getAgentWallet(adminClient: ReturnType<typeof createClient>): Pro
   return data?.value || null;
 }
 
-// Tool definitions for the AI agent
 const AGENT_TOOLS = [
   {
     type: "function",
@@ -126,113 +125,76 @@ const AGENT_TOOLS = [
   },
 ];
 
-// Execute tool calls
 async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
-  const thirdwebKey = Deno.env.get("THIRDWEB_SECRET_KEY") || "";
-
   switch (name) {
     case "get_token_balance": {
       const wallet = args.wallet_address as string;
       const token = (args.token_address as string) || KAI_TOKEN;
       try {
-        const res = await fetch(
-          `https://base.blockscout.com/api/v2/addresses/${wallet}/tokens/${token}`,
-        );
+        const res = await fetch(`https://base.blockscout.com/api/v2/addresses/${wallet}/tokens/${token}`);
         const data = await res.json();
         return JSON.stringify({ balance: data?.value || "0", token: data?.token || {} });
       } catch (e) {
         return JSON.stringify({ error: `Failed to fetch balance: ${(e as Error).message}` });
       }
     }
-
     case "get_transaction_history": {
       const wallet = args.wallet_address as string;
       const limit = Math.min((args.limit as number) || 10, 25);
       try {
-        const res = await fetch(
-          `https://base.blockscout.com/api/v2/addresses/${wallet}/transactions?limit=${limit}`,
-        );
+        const res = await fetch(`https://base.blockscout.com/api/v2/addresses/${wallet}/transactions?limit=${limit}`);
         const data = await res.json();
         const txs = (data?.items || []).map((tx: any) => ({
-          hash: tx.hash,
-          from: tx.from?.hash,
-          to: tx.to?.hash,
-          value: tx.value,
-          status: tx.status,
-          timestamp: tx.timestamp,
-          method: tx.method,
+          hash: tx.hash, from: tx.from?.hash, to: tx.to?.hash,
+          value: tx.value, status: tx.status, timestamp: tx.timestamp, method: tx.method,
         }));
         return JSON.stringify({ transactions: txs });
       } catch (e) {
         return JSON.stringify({ error: `Failed to fetch transactions: ${(e as Error).message}` });
       }
     }
-
     case "get_token_info": {
       const token = args.token_address as string;
       try {
         const res = await fetch(`https://base.blockscout.com/api/v2/tokens/${token}`);
         const data = await res.json();
         return JSON.stringify({
-          name: data?.name,
-          symbol: data?.symbol,
-          decimals: data?.decimals,
-          total_supply: data?.total_supply,
-          holders_count: data?.holders_count,
-          exchange_rate: data?.exchange_rate,
-          type: data?.type,
+          name: data?.name, symbol: data?.symbol, decimals: data?.decimals,
+          total_supply: data?.total_supply, holders_count: data?.holders_count,
+          exchange_rate: data?.exchange_rate, type: data?.type,
         });
       } catch (e) {
         return JSON.stringify({ error: `Failed to fetch token info: ${(e as Error).message}` });
       }
     }
-
     case "web_search": {
       const query = args.query as string;
       return JSON.stringify({
         note: "Web search results for: " + query,
-        results: [
-          { title: "Search capability active", snippet: `Results for "${query}" would be displayed here. In production, integrate with a search API.` },
-        ],
+        results: [{ title: "Search capability active", snippet: `Results for "${query}" would be displayed here.` }],
       });
     }
-
     case "get_swap_quote": {
-      const fromToken = args.from_token as string;
-      const toToken = args.to_token as string;
-      const amount = args.amount as string;
       return JSON.stringify({
         quote: {
-          from: fromToken,
-          to: toToken,
-          amount,
+          from: args.from_token, to: args.to_token, amount: args.amount,
           estimated_output: "Quote requires DEX aggregator integration",
           dex: "Uniswap V3 (Base)",
-          note: "To execute swaps, approve and sign the transaction in your wallet",
         },
       });
     }
-
     case "delegate_to_agent": {
       const agentId = args.agent_id as string;
       const task = args.task as string;
-      // A2A delegation - call the a2a edge function
       try {
         const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
         const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
         const res = await fetch(`${supabaseUrl}/functions/v1/a2a`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${serviceRoleKey}`,
-          },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceRoleKey}` },
           body: JSON.stringify({
-            jsonrpc: "2.0",
-            method: "tasks/send",
-            params: {
-              agent_id: agentId,
-              task: { message: task },
-            },
+            jsonrpc: "2.0", method: "tasks/send",
+            params: { agent_id: agentId, task: { message: task } },
             id: crypto.randomUUID(),
           }),
         });
@@ -242,7 +204,6 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         return JSON.stringify({ error: `A2A delegation failed: ${(e as Error).message}` });
       }
     }
-
     default:
       return JSON.stringify({ error: `Unknown tool: ${name}` });
   }
@@ -271,12 +232,10 @@ Deno.serve(async (req) => {
     const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
     if (!lovableApiKey) throw new Error("LOVABLE_API_KEY not configured");
 
-    // Auth
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
@@ -288,27 +247,23 @@ Deno.serve(async (req) => {
     const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
     if (claimsErr || !claimsData?.claims) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
     const userId = claimsData.claims.sub as string;
 
     if (!checkRateLimit(userId)) {
       return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
-        status: 429,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     const body = await req.json();
     const messages = body?.messages;
-    const stream = body?.stream === true;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return new Response(JSON.stringify({ error: "Invalid input: messages array required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
@@ -316,7 +271,7 @@ Deno.serve(async (req) => {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    // x402 Payment
+    // x402 Payment check
     const paymentHeader = req.headers.get("x-payment") || body?.paymentHeader;
     const agentWallet = await getAgentWallet(adminClient);
 
@@ -325,99 +280,117 @@ Deno.serve(async (req) => {
         JSON.stringify({
           error: "Payment Required",
           x402: {
-            version: "2",
-            maxAmountRequired: CHAT_PRICE_KAI,
-            asset: KAI_TOKEN,
-            network: `eip155:${BASE_CHAIN_ID}`,
-            chainId: BASE_CHAIN_ID,
+            version: "2", maxAmountRequired: CHAT_PRICE_KAI, asset: KAI_TOKEN,
+            network: `eip155:${BASE_CHAIN_ID}`, chainId: BASE_CHAIN_ID,
             payTo: agentWallet || "0x0000000000000000000000000000000000000000",
             description: `Chat with Kai Agent - ${CHAT_PRICE_KAI} $KAI per message`,
             resource: "/kai-chat",
           },
         }),
-        {
-          status: 402,
-          headers: { ...corsHeaders, "Content-Type": "application/json", "X-Payment-Required": "true" },
-        }
+        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json", "X-Payment-Required": "true" } }
       );
     }
 
     // Log usage
     await adminClient.from("usage_logs").insert({
-      user_id: userId,
-      endpoint: "chat",
-      cost: parseInt(CHAT_PRICE_KAI),
+      user_id: userId, endpoint: "chat", cost: parseInt(CHAT_PRICE_KAI),
     });
 
-    // Build AI request with tools
-    const aiMessages = [{ role: "system", content: SYSTEM_PROMPT }, ...messages];
+    // Build AI messages with tool-calling loop (non-streaming for tool resolution)
+    const aiMessages: any[] = [{ role: "system", content: SYSTEM_PROMPT }, ...messages];
+    let toolCallsMade = false;
 
-    // Tool-calling loop (max 5 iterations)
-    let finalResponse: any = null;
     for (let i = 0; i < 5; i++) {
       const aiRes = await fetch(AI_GATEWAY, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${lovableApiKey}`,
-          "Content-Type": "application/json",
-        },
+        headers: { Authorization: `Bearer ${lovableApiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "openai/gpt-5",
-          messages: aiMessages,
-          tools: AGENT_TOOLS,
-          stream: false,
+          model: "openai/gpt-5", messages: aiMessages, tools: AGENT_TOOLS, stream: false,
         }),
       });
 
       if (!aiRes.ok) {
         const errText = await aiRes.text();
         console.error("AI Gateway error:", aiRes.status, errText);
+        if (aiRes.status === 429) {
+          return new Response(JSON.stringify({ error: "Rate limits exceeded, please try again later." }), {
+            status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        if (aiRes.status === 402) {
+          return new Response(JSON.stringify({ error: "AI credits exhausted." }), {
+            status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
         throw new Error(`AI error: ${aiRes.status}`);
       }
 
       const aiData = await aiRes.json();
       const choice = aiData.choices?.[0];
-
       if (!choice) throw new Error("No response from AI");
 
-      // If model wants to call tools
       if (choice.finish_reason === "tool_calls" && choice.message?.tool_calls?.length) {
+        toolCallsMade = true;
         aiMessages.push(choice.message);
-
         for (const toolCall of choice.message.tool_calls) {
           const args = JSON.parse(toolCall.function.arguments || "{}");
           const result = await executeTool(toolCall.function.name, args);
-          aiMessages.push({
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: result,
-          });
+          aiMessages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
         }
-        continue; // Loop back for model to process tool results
+        continue;
       }
 
-      // Final text response
-      finalResponse = {
-        response: choice.message?.content || "",
-        tool_calls_made: i > 0,
-        model: "openai/gpt-5",
-      };
+      // No more tool calls — now stream the final response
       break;
     }
 
-    if (!finalResponse) {
-      finalResponse = { response: "I exceeded my tool call limit. Please try a simpler question.", model: "openai/gpt-5" };
+    // Final streaming response after all tools resolved
+    const streamRes = await fetch(AI_GATEWAY, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${lovableApiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "openai/gpt-5", messages: aiMessages, stream: true,
+        // No tools on the final streaming call to avoid tool_calls in stream
+      }),
+    });
+
+    if (!streamRes.ok || !streamRes.body) {
+      const errText = await streamRes.text();
+      console.error("Stream error:", streamRes.status, errText);
+      throw new Error(`AI stream error: ${streamRes.status}`);
     }
 
-    return new Response(JSON.stringify(finalResponse), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    // Pipe through SSE stream, injecting a metadata event at the start
+    const reader = streamRes.body.getReader();
+    const encoder = new TextEncoder();
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        // Send metadata as first SSE event
+        const meta = JSON.stringify({ tool_calls_made: toolCallsMade });
+        controller.enqueue(encoder.encode(`data: ${meta}\n\n`));
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+          }
+        } catch (e) {
+          console.error("Stream read error:", e);
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
     });
   } catch (err) {
     console.error("kai-chat error:", err);
     return new Response(JSON.stringify({ error: (err as Error).message }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });

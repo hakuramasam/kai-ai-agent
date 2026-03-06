@@ -10,6 +10,7 @@ import ReactMarkdown from "react-markdown";
 
 const KAI_TOKEN = "0x86af9cb35a613992ea552e0ba7419f1dada3084c";
 const BASE_CHAIN_ID = 8453;
+const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/kai-chat`;
 
 interface Message {
   id: string;
@@ -37,6 +38,7 @@ export default function Chat() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [paymentPending, setPaymentPending] = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,17 +53,99 @@ export default function Chat() {
   const signX402Payment = async (paymentDetails: X402PaymentDetails): Promise<string> => {
     if (!address) throw new Error("No wallet connected");
     const paymentMessage = JSON.stringify({
-      protocol: "x402",
-      version: "2",
+      protocol: "x402", version: "2",
       amount: paymentDetails.maxAmountRequired,
-      token: paymentDetails.asset,
-      chain: paymentDetails.chainId,
-      to: paymentDetails.payTo,
-      nonce: Date.now().toString(),
-      from: address,
+      token: paymentDetails.asset, chain: paymentDetails.chainId,
+      to: paymentDetails.payTo, nonce: Date.now().toString(), from: address,
     });
     const signature = await signMessageAsync({ message: paymentMessage, account: address });
     return btoa(JSON.stringify({ signature, payload: paymentMessage, from: address }));
+  };
+
+  const streamResponse = async (paymentHeader: string, chatHistory: { role: string; content: string }[]) => {
+    const token = session?.access_token;
+    if (!token) throw new Error("No session");
+
+    const resp = await fetch(CHAT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        "x-payment": paymentHeader,
+      },
+      body: JSON.stringify({ messages: chatHistory, paymentHeader }),
+    });
+
+    if (!resp.ok) {
+      const errData = await resp.json().catch(() => ({ error: "Request failed" }));
+      throw new Error(errData?.error || `Error ${resp.status}`);
+    }
+
+    if (!resp.body) throw new Error("No response body");
+
+    setStreaming(true);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let assistantContent = "";
+    let toolsUsed = false;
+    let isFirstDataEvent = true;
+    const assistantId = crypto.randomUUID();
+
+    // Add empty assistant message
+    setMessages((prev) => [...prev, {
+      id: assistantId, role: "assistant", content: "", timestamp: new Date(),
+    }]);
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let newlineIndex: number;
+        while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+          let line = buffer.slice(0, newlineIndex);
+          buffer = buffer.slice(newlineIndex + 1);
+          if (line.endsWith("\r")) line = line.slice(0, -1);
+          if (line.startsWith(":") || line.trim() === "") continue;
+          if (!line.startsWith("data: ")) continue;
+
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === "[DONE]") break;
+
+          try {
+            const parsed = JSON.parse(jsonStr);
+
+            // First event is our metadata
+            if (isFirstDataEvent && parsed.tool_calls_made !== undefined) {
+              toolsUsed = parsed.tool_calls_made;
+              isFirstDataEvent = false;
+              continue;
+            }
+            isFirstDataEvent = false;
+
+            const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+            if (content) {
+              assistantContent += content;
+              setMessages((prev) =>
+                prev.map((m) => m.id === assistantId ? { ...m, content: assistantContent, toolsUsed } : m)
+              );
+            }
+          } catch {
+            // Incomplete JSON, put back
+            buffer = line + "\n" + buffer;
+            break;
+          }
+        }
+      }
+    } finally {
+      setStreaming(false);
+      // Final update with toolsUsed
+      setMessages((prev) =>
+        prev.map((m) => m.id === assistantId ? { ...m, content: assistantContent || "No response received.", toolsUsed } : m)
+      );
+    }
   };
 
   const sendMessage = async () => {
@@ -71,10 +155,7 @@ export default function Chat() {
     setInput("");
 
     const userMsg: Message = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: text,
-      timestamp: new Date(),
+      id: crypto.randomUUID(), role: "user", content: text, timestamp: new Date(),
     };
     setMessages((prev) => [...prev, userMsg]);
     setSending(true);
@@ -84,13 +165,9 @@ export default function Chat() {
         throw new Error("Connect & bind your wallet to pay with $KAI");
       }
 
-      // Build conversation history for context
-      const chatHistory = [...messages, userMsg].map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      const chatHistory = [...messages, userMsg].map((m) => ({ role: m.role, content: m.content }));
 
-      // Step 1: Send without payment to get 402
+      // Step 1: Get 402 payment details (non-streaming request without payment)
       const initialRes = await supabase.functions.invoke("kai-chat", {
         body: { messages: chatHistory },
       });
@@ -100,55 +177,25 @@ export default function Chat() {
       if (initialData?.x402 || initialData?.error === "Payment Required") {
         const paymentDetails: X402PaymentDetails = initialData.x402;
         setPaymentPending(true);
-
         const paymentHeader = await signX402Payment(paymentDetails);
         setPaymentPending(false);
 
-        const paidRes = await supabase.functions.invoke("kai-chat", {
-          body: { messages: chatHistory, paymentHeader },
-        });
-
-        if (paidRes.error) {
-          const errBody = paidRes.error as any;
-          throw new Error(errBody?.message || errBody?.error || "Payment failed");
-        }
-
-        const data = paidRes.data;
-        const reply = data?.response || data?.text || data?.message || (typeof data === "string" ? data : JSON.stringify(data));
-
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: reply,
-            timestamp: new Date(),
-            toolsUsed: data?.tool_calls_made,
-          },
-        ]);
-
+        // Step 2: Stream the paid response
+        await streamResponse(paymentHeader, chatHistory);
         toast.success(`Paid ${paymentDetails.maxAmountRequired} $KAI`);
       } else if (initialRes.error) {
         throw new Error((initialRes.error as any)?.message || "Request failed");
       } else {
-        const reply = initialData?.response || initialData?.text || initialData?.message || (typeof initialData === "string" ? initialData : JSON.stringify(initialData));
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: reply,
-            timestamp: new Date(),
-            toolsUsed: initialData?.tool_calls_made,
-          },
-        ]);
+        // Unexpected non-402 response
+        const reply = initialData?.response || initialData?.text || JSON.stringify(initialData);
+        setMessages((prev) => [...prev, {
+          id: crypto.randomUUID(), role: "assistant", content: reply, timestamp: new Date(),
+        }]);
       }
     } catch (err: any) {
       setPaymentPending(false);
       const msg = err.message || "Failed to send message";
-      if (!msg.includes("User rejected")) {
-        setError(msg);
-      }
+      if (!msg.includes("User rejected")) setError(msg);
     } finally {
       setSending(false);
     }
@@ -165,7 +212,7 @@ export default function Chat() {
           <MessageBubble key={msg.id} message={msg} />
         ))}
 
-        {sending && (
+        {sending && !streaming && (
           <div className="flex justify-start">
             <div className="card-glass border border-border/50 rounded-xl px-4 py-3 flex items-center gap-2">
               {paymentPending ? (
@@ -295,16 +342,20 @@ function MessageBubble({ message }: { message: Message }) {
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
         className={`max-w-[85%] rounded-xl px-4 py-3 text-sm leading-relaxed ${
-          isUser
-            ? "bg-primary text-primary-foreground"
-            : "card-glass border border-border/50"
+          isUser ? "bg-primary text-primary-foreground" : "card-glass border border-border/50"
         }`}
       >
         {isUser ? (
           message.content
         ) : (
           <div className="prose prose-sm prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-            <ReactMarkdown>{message.content}</ReactMarkdown>
+            {message.content ? (
+              <ReactMarkdown>{message.content}</ReactMarkdown>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                <Loader2 className="w-3 h-3 animate-spin" /> Generating...
+              </span>
+            )}
             {message.toolsUsed && (
               <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/30">
                 <Wrench className="w-3 h-3 text-primary" />
