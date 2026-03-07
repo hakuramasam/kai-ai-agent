@@ -56,16 +56,16 @@ Deno.serve(async (req) => {
 
     const action = body?.action as string;
 
-    // --- Get or create the agent wallet ---
+    // --- List server wallets ---
     if (action === "get-wallet") {
-      const res = await fetch(`${THIRDWEB_API}/v1/wallets`, {
+      const res = await fetch(`${THIRDWEB_API}/v1/wallets/server?limit=50&page=1`, {
         method: "GET",
         headers: {
           "x-secret-key": thirdwebKey,
-          "Content-Type": "application/json",
         },
       });
       const text = await res.text();
+      console.log("Thirdweb get-wallet response:", res.status, text.slice(0, 500));
       let data: unknown;
       try {
         data = JSON.parse(text);
@@ -85,18 +85,19 @@ Deno.serve(async (req) => {
     }
 
     if (action === "create-wallet") {
-      const res = await fetch(`${THIRDWEB_API}/v1/wallets`, {
+      console.log("Creating server wallet via Thirdweb...");
+      const res = await fetch(`${THIRDWEB_API}/v1/wallets/server`, {
         method: "POST",
         headers: {
           "x-secret-key": thirdwebKey,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          label: "kai-agent-wallet",
-          type: "smart:local",
+          identifier: "kai-agent-wallet",
         }),
       });
       const text = await res.text();
+      console.log("Thirdweb create-wallet response:", res.status, text.slice(0, 500));
       let data: any;
       try {
         data = JSON.parse(text);
@@ -115,7 +116,8 @@ Deno.serve(async (req) => {
         auth: { autoRefreshToken: false, persistSession: false },
       });
 
-      const walletAddr = data.address || data.walletAddress;
+      const walletAddr = data.address || data.smartAccountAddress || data.walletAddress;
+      console.log("Wallet address from response:", walletAddr, "Full response:", JSON.stringify(data));
       if (walletAddr) {
         await adminClient.from("agent_config").upsert({
           key: "agent_wallet_address",
@@ -140,7 +142,6 @@ Deno.serve(async (req) => {
       const walletAddress = body?.walletAddress as string;
       if (!walletAddress) throw new Error("walletAddress required");
 
-      // Use Blockscout API instead of thirdweb for balance
       try {
         const res = await fetch(
           `https://base.blockscout.com/api/v2/addresses/${walletAddress}/tokens/${KAI_TOKEN}`
