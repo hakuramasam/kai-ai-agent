@@ -70,12 +70,13 @@ export default function Admin() {
         body: { action: "create-wallet" },
       });
       if (error) throw error;
-      const addr = data?.wallet?.address || data?.wallet?.walletAddress;
+      const addr = data?.wallet?.address || data?.wallet?.smartAccountAddress || data?.wallet?.walletAddress;
       if (addr) {
         setAgentWallet(addr);
         toast.success("Agent wallet created!");
         await loadBalance(addr);
       } else {
+        console.error("Wallet response:", JSON.stringify(data));
         toast.error("Wallet created but no address returned");
       }
     } catch (err: any) {
